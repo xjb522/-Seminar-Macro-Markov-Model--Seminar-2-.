@@ -4,8 +4,10 @@ from sqlalchemy.dialects.mssql.information_schema import columns
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import scipy 
+from scipy.optimize import minimize
 import tidyfinance as td
+
+import statsmodels.api as sm
 
 
 variables = [
@@ -139,23 +141,154 @@ for i in range(0,4):
     Gamma.append(OLS(Standard_array[:,i], Standard_shift[:,i])[0])
     theta.append(OLS(Standard_array[:,i], Standard_shift[:,i])[1])
 
+eta_t = Standard_array - Gamma - theta * Standard_shift
 
 
+def AUG_DICKY_Fuller(v):
+
+    v = pd.DataFrame(v)
+
+    Diff_var = np.array(v.diff(1).dropna())
+
+    pi = []
+
+    # Lagged values: y_(t-1)
+    Standard_shift = np.array(v.iloc[:-1]).astype(float)
+
+    # Align observations
+    for i in range(Diff_var.shape[1]):
+        pi.append(OLS(Diff_var[:,i], Standard_shift[:,i])[1])
+
+    li = []
+
+    for i, pi_value in enumerate(pi):
+
+        # Regression for the standard error
+        Y = Diff_var[:,i]
+        X = Standard_shift[:,i]
+
+        X_matrix = np.column_stack((np.ones(len(X)), X))
+
+        beta = np.linalg.lstsq(X_matrix, Y, rcond=None)[0]
+
+        residuals = Y - X_matrix @ beta
+
+        sigma2 = np.sum(residuals**2) / (len(Y) - 2)
+
+        var_beta = sigma2 * np.linalg.inv(X_matrix.T @ X_matrix)
+
+        se_pi = np.sqrt(var_beta[1,1])
+
+        test = pi_value / se_pi
+
+        if test < -2.86:
+            print(f"The model {v.columns[i]} is stationary. T-value {test:.4f}")
+            li.append(f"The model is stationary. T-value {test:.4f}")
+        else:
+            print(f"The model {v.columns[i]} is not stationary. T-value {test:.4f}")
+            li.append(f"The model is not stationary. T-value {test:.4f}")
+
+    return li
 
 
-# %% Test run af ols
-print(OLS(Standard_array[:,0], Standard_shift[:,0]))
-
-print(Standard_array[:,0])
-
-test_x = np.array([1,2,4,5])
-test_y = np.array([2,3,5,5])
-
-x_led_1 = np.column_stack((np.ones(test_x.size), test_x))
-
-print(x_led_1.T)
+dddd = AUG_DICKY_Fuller(standard)
 
 
+Diff_var = np.array(standard.diff(1).dropna())
 
-y_led = np.linalg.vecdot(x_led_1.T, Y)
-ols = np.linalg.vecdot(x_led_2, y_led)
+pi = []
+
+for i in range(0,4):
+    pi.append(OLS(Diff_var[:,i], Standard_shift[:,i])[1])
+
+def T_test_zero(pi_value):
+
+    li = []
+
+    for i in list(pi_value):
+        pi_value = i
+        test = pi_value / pi_value.std()
+        if test.any() > 1.96:
+            print(f"The model {i} is Stationary")
+            li.append(f"The model is stationary. T-value {i}")
+        else:
+            print(f"The model {i} is not stationay")
+            li.append(f"The model is not stationary. T-value {i}")
+    return li
+
+ADF = T_test_zero(pi)
+
+
+## Macro
+
+standard = np.asarray(standard, dtype=np.float64)
+
+cov_matrix = np.cov(standard, rowvar=False)
+
+Eigenvalues, eigenvector = np.linalg.eigh(cov_matrix)
+
+w = eigenvector[:, -1]
+
+F = standard @ w
+
+plt.close()
+plt.clf()
+
+plt.plot(F)
+
+plt.show()
+plt.grid()
+
+def normal_pdf(x, mu, sigma):
+
+    a = 1 / (sigma * np.sqrt(2 * np.pi))
+
+    b = -0.5 * ((x - mu) / sigma)**2
+
+    return a * np.exp(b)
+
+adf_f = AUG_DICKY_Fuller(F)
+
+
+#  model
+
+Data_Macro = Data_Macro.astype(float)
+
+for i in Data_Macro.columns:
+    Data_Macro[i] = np.log(Data_Macro[i])
+
+Data_Macro = Data_Macro.diff(1).dropna()
+
+mean = []
+std = []
+
+for i in Data_Macro.columns:
+    mean.append(np.mean(Data_Macro[i]))
+    std.append(np.std(Data_Macro[i]))
+
+standard = {}
+
+for i, name in enumerate(Data_Macro.columns):
+    standard[name] = (Data_Macro[name] - mean[i]) / std[i]
+
+standard = pd.DataFrame(standard)
+
+standard = np.asarray(standard, dtype=np.float64)
+
+cov_matrix = np.cov(standard, rowvar=False)
+
+Eigenvalues, eigenvector = np.linalg.eigh(cov_matrix)
+
+w = eigenvector[:, -1]
+
+# Orient the factor towards positive economic growth
+if np.sum(w) < 0:
+    w = -w
+
+F = standard @ w
+
+plt.figure(figsize=(12, 5))
+plt.plot(Data_Macro.index, F)
+plt.axhline(0, color="black", linestyle="--")
+plt.grid()
+plt.show()
